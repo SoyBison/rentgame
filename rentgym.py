@@ -17,7 +17,8 @@ class RentGym:
         self.p = np.random.uniform(0, 1, observables)
         self.r = np.random.uniform(0, 1, unobservables)
 
-        self.mu_value = (4 * self.mu_c) / (observables + unobservables)
+        self.mu_v = np.random.randint(500, 2000)
+        self.mu_value = (4 * self.mu_v) / (observables + unobservables)
 
     def reset(self):
         self.done = False
