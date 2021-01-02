@@ -54,5 +54,5 @@ class Apartment:
 
         z = (self.c - self.mu_c) / self.sigma_c
         quality = (1 + z / (1 + np.abs(z))) * 0.5
-        self.omega = np.random.choice([False, True], p=(1 - quality, quality), size=self.n_omega)
-        self.upsilon = np.random.choice([False, True], p=(1 - quality, quality), size=self.n_upsilon)
+        self.omega = np.random.choice([0, 1], p=(1 - quality, quality), size=self.n_omega)
+        self.upsilon = np.random.choice([0, 1], p=(1 - quality, quality), size=self.n_upsilon)

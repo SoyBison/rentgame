@@ -63,14 +63,14 @@ class Rule37(Strategy):
         if self.t < self.t_switch:
             self.memory.append(obs_score)
             self.t += 1
-            return False
+            return 0
         elif np.all(np.greater(obs_score, self.memory)):
             self.buy_ts.append(self.t)
-            return True
+            return 1
         else:
             self.memory.append(obs_score)
             self.t += 1
-            return False
+            return 0
 
     def play(self, **kwargs):
         self.t = 0
