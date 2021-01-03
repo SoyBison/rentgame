@@ -1,14 +1,16 @@
 import torch
+from tqdm import tqdm
 from torch.nn.functional import relu
 import torch.nn as nn
 import torch.optim as optim
 from collections import namedtuple
 import numpy as np
-from rent_dms import Strategy
+from rent_dms import Strategy, Rule37, RandomActor, ValueThreshold
 import random
 from rentgym import RentGym
 import math
 import matplotlib.pyplot as plt
+import seaborn as sns
 from itertools import count
 
 Transition = namedtuple('Transition',
@@ -32,11 +34,18 @@ class TorchStrat(Strategy):
     def __init__(self, network):
         super(TorchStrat, self).__init__()
         self.network = network
+        self.network.eval()
 
     def choose_action(self, p: np.ndarray, r: np.ndarray, omega: np.ndarray, c: int, mu_v=None):
+        super(TorchStrat, self).choose_action(p, r, omega, c, mu_v)
         with torch.no_grad():
+            p = torch.tensor([p], device=device, dtype=torch.double)
+            r = torch.tensor([r], device=device, dtype=torch.double)
+            omega = torch.tensor([omega], device=device, dtype=torch.double)
+            c = torch.tensor([[c]], device=device, dtype=torch.double)
+
             decision = self.network({'p': p, 'r': r, 'oo': omega, 'c': c})
-            return bool(decision)
+            return decision.max(1)[1].item()
 
 
 class DQN(nn.Module):
@@ -48,9 +57,7 @@ class DQN(nn.Module):
         self.oo_proc = nn.Linear(n_omega, preprocdim)
 
         self.fc0 = nn.Linear(preprocdim * 3 + 1, 128)
-        self.fc1 = nn.Linear(128, 128)
-        self.fc2 = nn.Linear(128, 64)
-        self.fc3 = nn.Linear(64, 1)
+        self.head = nn.Linear(128, 2)
 
         self.optim = optim.Adam(self.parameters(), lr=0.001)
         self.double()
@@ -64,16 +71,11 @@ class DQN(nn.Module):
         p = relu(self.p_proc(x['p']))
         r = relu(self.r_proc(x['r']))
         oo = relu(self.oo_proc(x['oo']))
-        print(p.shape)
-        print(r.shape)
-        print(oo.shape)
-        print(x['c'].shape)
         h = torch.cat([p, r, oo, x['c']], 1)
 
         h = relu(self.fc0(h))
-        h = relu(self.fc1(h))
-        h = relu(self.fc2(h))
-        y = torch.heaviside(self.fc3(h), torch.tensor([0], dtype=torch.double, device=device)).int()
+
+        y = self.head(h)
 
         return y
 
@@ -114,8 +116,8 @@ def plot_durations(durations):
     plt.show()
 
 
-def main():
-    num_episodes = 1000
+def train_dqn():
+    num_episodes = 10000
     env = RentGym()
     episode_durations = []
 
@@ -135,7 +137,7 @@ def main():
         steps_done += 1
         if sample > eps_threshold:
             with torch.no_grad():
-                return policy_net(gamestate)
+                return policy_net(gamestate).max(1)[1].view(1, 1)
         else:
             return torch.tensor([[random.randint(0, 1)]], device=device, dtype=torch.int64)
 
@@ -164,8 +166,10 @@ def main():
 
         state_action_values = policy_net(state_batch).gather(1, action_batch)
 
-        next_state_values = torch.zeros(BATCH_SIZE, device=device)
-        next_state_values[non_final_mask] = target_net(non_final_next_states)
+        next_state_values = torch.zeros(BATCH_SIZE, device=device, dtype=torch.double)
+        action_batch = action_batch[non_final_mask]
+        temp = target_net(non_final_next_states).gather(1, action_batch)
+        next_state_values[non_final_mask] = temp.view(1, -1)
 
         expected_state_action_values = (next_state_values * GAMMA) + reward_batch
 
@@ -177,7 +181,8 @@ def main():
         policy_net.optim.step()
 
     rewards = []
-    for i_ep in range(num_episodes):
+    pbar = tqdm(range(num_episodes))
+    for i_ep in pbar:
         apt, p, r = env.reset()
         state = {'p': torch.tensor([p], device=device),
                  'r': torch.tensor([r], device=device),
@@ -204,14 +209,73 @@ def main():
             optimize_model()
             if done:
                 episode_durations.append(t + 1)
-                print(reward_tot)
                 rewards.append(reward_tot)
                 break
 
         if i_ep % TARGET_UPDATE == 0:
             target_net.load_state_dict(policy_net.state_dict())
+            pbar.set_description(f'Score (50 ep avg): {np.mean(rewards[-50:]):0.5}')
+    print('Training Complete')
+    return policy_net
 
-    print('Complete')
+
+class PiThreshold:
+    """Created to test the hypothesis that the deep-q network is just finding a profit threshold that works for all
+    games, leveraging the statistical properties. This'll use a simple binary threshold. This is an extremely simple
+    reinforcement learner."""
+
+    def __init__(self, eta=.01):
+        self.pi = np.random.randint(500, 2000)
+        self.eta = eta
+
+    def update(self, score):
+        if score == 0:
+            self.pi -= self.eta * self.pi
+        elif score < 0:
+            self.pi -= score * self.eta
+
+    def train(self, n=10000):
+        for _ in tqdm(range(n)):
+            strat = ValueThreshold(threshold=self.pi)
+            score = strat.play()
+            self.update(score)
+
+
+def main():
+    policy_net = train_dqn()
+    pithresh = PiThreshold()
+    pithresh.train()
+    thrstrat = ValueThreshold(threshold=pithresh.pi)
+    thrscores = thrstrat.play_n()
+    dqnstrat = TorchStrat(policy_net)
+    dqnscores = dqnstrat.play_n()
+    r37strat = Rule37()
+    r37scores = r37strat.play_n()
+    randstrat = RandomActor()
+    randscores = randstrat.play_n()
+
+    sns.kdeplot(dqnscores, label='Deep Q')
+    sns.kdeplot(r37scores, label='37 Rule')
+    sns.kdeplot(randscores, label='Random Actor')
+    sns.kdeplot(thrscores, label='Threshold Learning')
+
+    plt.legend()
+    plt.title('Distribution of Scores')
+    plt.show()
+
+    sns.kdeplot(dqnstrat.buy_ts, label='Deep Q', clip=(0, 100))
+    sns.kdeplot(r37strat.buy_ts, label='37 Rule', clip=(0, 100))
+    sns.kdeplot(randstrat.buy_ts, label='Random Actor', clip=(0, 100))
+    sns.kdeplot(thrstrat.buy_ts, label='Threshold Learning', clip=(0, 100))
+
+    plt.legend()
+    plt.title('Distribution of Buy Periods')
+    plt.show()
+
+    print(f'In Tests, Deep Q Scores {np.mean(dqnscores)} on Average.')
+    print(f'In Tests, the 37 Rule Scores {np.mean(r37scores)} on Average.')
+    print(f'In Tests, a Random Actor Scores {np.mean(randscores)} on Average.')
+    print(f'In Tests, Threshold Learning Scores {np.mean(thrscores)} on Average.')
 
 
 if __name__ == '__main__':

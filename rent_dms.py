@@ -9,6 +9,8 @@ from tqdm import tqdm
 
 class Strategy:
     def __init__(self):
+        self.t = 0
+        self.ts = []
         pass
 
     @abstractmethod
@@ -22,6 +24,7 @@ class Strategy:
         :param c: int
         :return: bool
         """
+        self.t += 1
         pass
 
     def play(self, **kwargs):
@@ -30,6 +33,8 @@ class Strategy:
         while True:
             apt, reward, done, _ = env.step(self.choose_action(p, r, apt.omega, apt.c, env.mu_v))
             if done:
+                self.ts.append(self.t)
+                self.t = 0
                 break
         return reward
 
@@ -40,14 +45,35 @@ class Strategy:
 
         return rewards
 
+    @property
+    def buy_ts(self):
+        return self.ts
+
 
 class RandomActor(Strategy):
-    def __init__(self, p_buy=0.5):
+    def __init__(self, p_buy=0.075):
         super(RandomActor, self).__init__()
         self.p_buy = p_buy
 
     def choose_action(self, p: np.ndarray, r: np.ndarray, omega: np.ndarray, c: int, mu_v):
+        super(RandomActor, self).choose_action(p, r, omega, c, mu_v)
         return np.random.choice([True, False], p=[self.p_buy, 1 - self.p_buy])
+
+
+class ValueThreshold(Strategy):
+    def __init__(self, threshold):
+        super(ValueThreshold, self).__init__()
+        self.threshold = threshold
+        self.obs_score = None
+
+    def choose_action(self, p: np.ndarray, r: np.ndarray, omega: np.ndarray, c: int, mu_v):
+        super(ValueThreshold, self).choose_action(p, r, omega, c, mu_v)
+        obs_score = (4 * mu_v * p.dot(omega) / len(p)) - c
+        self.obs_score = obs_score
+        if obs_score >= self.threshold:
+            return 1
+        else:
+            return 0
 
 
 class Rule37(Strategy):
@@ -56,20 +82,18 @@ class Rule37(Strategy):
         self.t = 0
         self.t_switch = 37
         self.memory = []
-        self.buy_ts = []
 
     def choose_action(self, p: np.ndarray, r: np.ndarray, omega: np.ndarray, c: int, mu_v):
+        super(Rule37, self).choose_action(p, r, omega, c, mu_v)
+
         obs_score = (4 * mu_v * p.dot(omega) / len(p)) - c
         if self.t < self.t_switch:
             self.memory.append(obs_score)
-            self.t += 1
             return 0
         elif np.all(np.greater(obs_score, self.memory)):
-            self.buy_ts.append(self.t)
             return 1
         else:
             self.memory.append(obs_score)
-            self.t += 1
             return 0
 
     def play(self, **kwargs):
