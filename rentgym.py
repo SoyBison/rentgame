@@ -24,6 +24,16 @@ class RentGym:
         self.done = False
         self.apt = Apartment(self.n_omega, self.n_upsilon, self.mu_c, self.sigma_c)
         self.t = 0
+
+        self.mu_c = np.random.randint(500, 2000)
+        self.sigma_c = np.random.randint(100, 500)
+
+        self.p = np.random.uniform(0, 1, self.n_omega)
+        self.r = np.random.uniform(0, 1, self.n_upsilon)
+
+        self.mu_v = np.random.randint(500, 2000)
+        self.mu_value = (4 * self.mu_v) / (self.n_omega + self.n_upsilon)
+
         return self.apt, self.p, self.r
 
     def step(self, action):
