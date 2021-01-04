@@ -276,6 +276,7 @@ def main():
     print(f'In Tests, the 37 Rule Scores {np.mean(r37scores)} on Average.')
     print(f'In Tests, a Random Actor Scores {np.mean(randscores)} on Average.')
     print(f'In Tests, Threshold Learning Scores {np.mean(thrscores)} on Average.')
+    print(f"The Threshold Learner's decision threshold is {pithresh.pi}.")
 
 
 if __name__ == '__main__':
