@@ -80,6 +80,43 @@ class DQN(nn.Module):
         return y
 
 
+class DQNWMT(nn.Module):
+    def __init__(self, n_omega, n_upsilon, preprocdim=32, memory_size=8):
+        super(DQNWMT, self).__init__()
+        self.p_proc = nn.Linear(n_omega, preprocdim)
+        self.r_proc = nn.Linear(n_upsilon, preprocdim)
+        self.oo_proc = nn.Linear(n_omega, preprocdim)
+
+        self.memory = torch.zeros((1, memory_size), device=device)
+
+        self.fc0 = nn.Linear(preprocdim * 3 + 1 + memory_size, 128)
+
+        self.head = nn.Linear(128, 2)
+
+        self.memorizer = nn.Linear(128, memory_size)
+
+        self.optim = optim.Adam(self.parameters(), lr=0.001)
+        self.double()
+
+    def forward(self, x):
+        p = relu(self.p_proc(x['p']))
+        r = relu(self.r_proc(x['r']))
+        oo = relu(self.oo_proc(x['oo']))
+
+        h = torch.cat([p, r, oo, x['c'], self.memory], 1)
+
+        h = relu(self.fc0(h))
+
+        y = self.head(h)
+
+        self.memory = self.memorizer(h)
+
+        return y
+
+    def eternal_sunshine(self):
+        self.memory = torch.zeros_like(self.memory, device=device)
+
+
 class ReplayMemory:
     def __init__(self, capacity):
         self.capacity = capacity
@@ -116,13 +153,13 @@ def plot_durations(durations):
     plt.show()
 
 
-def train_dqn():
+def train(model):
     num_episodes = 10000
     env = RentGym()
     episode_durations = []
 
-    policy_net = DQN(env.n_omega, env.n_upsilon).to(device)
-    target_net = DQN(env.n_omega, env.n_upsilon).to(device)
+    policy_net = model(env.n_omega, env.n_upsilon).to(device)
+    target_net = model(env.n_omega, env.n_upsilon).to(device)
     target_net.load_state_dict(policy_net.state_dict())
     target_net.eval()
 
@@ -142,7 +179,7 @@ def train_dqn():
             return torch.tensor([[random.randint(0, 1)]], device=device, dtype=torch.int64)
 
     def optimize_model():
-        if len(memory) < BATCH_SIZE:
+        if len(memory) <= BATCH_SIZE:
             return
         transition = memory.sample(BATCH_SIZE)
         batch = Transition(*zip(*transition))
@@ -155,6 +192,7 @@ def train_dqn():
             'oo': torch.vstack([s['oo'] for s in batch.next_state if s is not None]),
             'c': torch.vstack([s['c'] for s in batch.next_state if s is not None]),
         }
+
         state_batch = {
             'p': torch.vstack([s['p'] for s in batch.state if s is not None]),
             'r': torch.vstack([s['r'] for s in batch.state if s is not None]),
@@ -210,6 +248,8 @@ def train_dqn():
             if done:
                 episode_durations.append(t + 1)
                 rewards.append(reward_tot)
+                if hasattr(model, 'memory'):
+                    model.eternal_sunshine()
                 break
 
         if i_ep % TARGET_UPDATE == 0:
@@ -235,20 +275,26 @@ class PiThreshold:
             self.pi -= score * self.eta
 
     def train(self, n=10000):
-        for _ in tqdm(range(n)):
-            strat = ValueThreshold(threshold=self.pi)
+        while True:
+            lastpi = self.pi
+            strat = ValueThreshold(self.pi)
             score = strat.play()
             self.update(score)
+            if score <= 0 and np.isclose(self.pi, lastpi):
+                break
 
 
 def main():
-    policy_net = train_dqn()
+    # memtenspnet = train(DQNWMT)
+    policy_net = train(DQN)
     pithresh = PiThreshold()
     pithresh.train()
     thrstrat = ValueThreshold(threshold=pithresh.pi)
     thrscores = thrstrat.play_n()
     dqnstrat = TorchStrat(policy_net)
     dqnscores = dqnstrat.play_n()
+    # mtstrat = TorchStrat(memtenspnet)
+    # mtscores = mtstrat.play_n()
     r37strat = Rule37()
     r37scores = r37strat.play_n()
     randstrat = RandomActor()
@@ -258,6 +304,7 @@ def main():
     sns.kdeplot(r37scores, label='37 Rule')
     sns.kdeplot(randscores, label='Random Actor')
     sns.kdeplot(thrscores, label='Threshold Learning')
+    # sns.kdeplot(mtscores, label='Memory Tensor Deep Q')
 
     plt.legend()
     plt.title('Distribution of Scores')
@@ -267,6 +314,7 @@ def main():
     sns.kdeplot(r37strat.buy_ts, label='37 Rule', clip=(0, 100))
     sns.kdeplot(randstrat.buy_ts, label='Random Actor', clip=(0, 100))
     sns.kdeplot(thrstrat.buy_ts, label='Threshold Learning', clip=(0, 100))
+    # sns.kdeplot(mtstrat.buy_ts, label='Memory Tensor Deep Q', clip=(0, 100))
 
     plt.legend()
     plt.title('Distribution of Buy Periods')

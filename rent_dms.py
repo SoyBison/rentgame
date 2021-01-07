@@ -11,6 +11,7 @@ class Strategy:
     def __init__(self):
         self.t = 0
         self.ts = []
+        self.network = None
         pass
 
     @abstractmethod
@@ -30,6 +31,10 @@ class Strategy:
     def play(self, **kwargs):
         env = RentGym(**kwargs)
         apt, p, r = env.reset()
+        try:
+            self.network.eternal_sunshine()
+        except AttributeError:
+            pass
         while True:
             apt, reward, done, _ = env.step(self.choose_action(p, r, apt.omega, apt.c, env.mu_v))
             if done:
